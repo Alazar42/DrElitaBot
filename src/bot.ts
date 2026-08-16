@@ -14,12 +14,28 @@ export function createBot(): { bot: Bot; poster: ChannelPoster } {
 
   // Authorization middleware: Only allow whitelisted users if ALLOWED_USERS is defined
   bot.use(async (ctx, next) => {
+    // Ignore channel posts and edited posts completely so the bot doesn't interfere with channel publishing
+    if (ctx.channelPost || ctx.editedChannelPost) {
+      return;
+    }
+
+    const messageText = ctx.message?.text || ctx.message?.caption || "";
+    const isCommand = messageText.startsWith("/");
+    const isPrivate = ctx.chat?.type === "private";
+
+    // Ignore regular conversation/posts in groups and supergroups that are not commands
+    if (!isCommand && !isPrivate) {
+      return;
+    }
+
     const userId = ctx.from?.id;
 
     if (config.allowedUsers.length > 0) {
       if (!userId || !config.allowedUsers.includes(userId)) {
         console.warn(`[AUTH] Unauthorized command attempt from User ID: ${userId || "unknown"} (@${ctx.from?.username || "none"})`);
-        await ctx.reply("Access denied. You are not authorized to use this bot.");
+        if (isPrivate || isCommand) {
+          await ctx.reply("Access denied. You are not authorized to use this bot.");
+        }
         return;
       }
     }
