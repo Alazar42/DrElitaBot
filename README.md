@@ -2,16 +2,19 @@
 
 An automated Telegram bot written in TypeScript that monitors the official [NASA Astronomy Picture of the Day (@apod_telegram)](https://t.me/apod_telegram) channel and automatically forwards daily APOD posts with high-resolution imagery and formatted explanations directly to your Telegram channel.
 
+Supports both **Vercel Serverless (100% Free Tier)** and traditional **Node.js 24/7 background worker** deployments.
+
 ---
 
 ## Features
 
-- **Automated Hourly Monitoring**: Runs a background cron scheduler to detect and publish new daily APOD posts as soon as NASA releases them.
+- **100% Free Serverless on Vercel**: Fully adapted for Vercel Serverless Functions and Vercel Cron Jobs.
+- **Automated Periodic Monitoring**: Uses Vercel Cron (or background `node-cron`) to check and forward new daily APOD posts automatically.
 - **Single Unified Photo + Caption Message**: Delivers posts with the image and complete formatted explanation (including clickable links and credits) attached directly as a single Telegram message.
-- **Direct Media Buffer Upload**: Downloads media in-memory and uploads it as raw image bytes (`InputFile`) to Telegram to avoid third-party CDN rate-limiting or broken preview errors.
-- **State Deduplication**: Automatically records posted post IDs and dates in a local state store (`data/bot_state.json`) to prevent duplicate publications across restarts.
-- **Access-Controlled Commands**: Restricted command access for authorized Telegram user IDs.
-- **Graceful Shutdown**: Handles process termination cleanly (`SIGINT`/`SIGTERM`).
+- **Direct Media Buffer Upload**: Downloads media in-memory and uploads raw image bytes (`InputFile`) to Telegram to avoid third-party CDN rate-limiting or broken preview errors.
+- **State Deduplication**: Automatically tracks published post IDs and dates to prevent duplicates.
+- **Access-Controlled Commands**: Whitelisted commands (`/help`, `/latest`, `/post_today`) restricted to authorized Telegram user IDs.
+- **1-Click Webhook Registration**: Easy `/api/set-webhook` endpoint to connect Telegram to your Vercel deployment instantly.
 
 ---
 
@@ -29,16 +32,49 @@ Authorized users (configured via `ALLOWED_USERS`) can interact with the bot usin
 
 ---
 
-## Prerequisites
+## Deploy to Vercel (100% Free)
 
-- [Node.js](https://nodejs.org/) (v18.0.0 or later recommended)
-- [npm](https://www.npmjs.com/)
-- A Telegram Bot token from [@BotFather](https://t.me/BotFather)
-- A Telegram Channel where your bot has been added as an **Administrator** with **Post Messages** permission.
+You can host DrElitaBot on Vercel's Free Hobby Tier without any paid servers.
+
+### 1. Import Repository into Vercel
+1. Go to [vercel.com](https://vercel.com) and log in with GitHub.
+2. Click **Add New...** > **Project**.
+3. Select your **`Alazar42/DrElitaBot`** repository.
+
+### 2. Configure Environment Variables
+Under **Environment Variables** in the Vercel project settings, add:
+
+| Key | Value Example | Description |
+| :--- | :--- | :--- |
+| `TELEGRAM_BOT_TOKEN` | Your Telegram Bot token from [@BotFather](https://t.me/BotFather) |
+| `TELEGRAM_CHANNEL_ID` | Target Channel ID or `@channel_username` (bot must be admin) |
+| `ALLOWED_USERS` | Comma-separated Telegram User IDs permitted to use commands |
+
+*(Optional)* If you want persistent deduplication across serverless cold boots:
+- Add a free **Upstash Redis** database from the Vercel Marketplace (Integration tab) or [upstash.com](https://upstash.com), which automatically sets `KV_REST_API_URL` and `KV_REST_API_TOKEN`.
+
+### 3. Deploy & Connect Webhook
+1. Click **Deploy**.
+2. Once the deployment finishes, copy your Vercel URL (e.g. `https://dr-elita-bot.vercel.app`).
+3. Open this URL in your browser to register the Telegram webhook:
+   ```text
+   https://dr-elita-bot.vercel.app/api/set-webhook
+   ```
+4. You will receive a success response:
+   ```json
+   {
+     "success": true,
+     "message": "Webhook successfully registered to: https://dr-elita-bot.vercel.app/api/webhook"
+   }
+   ```
+
+**That's it!** 
+- Vercel Cron will automatically trigger `/api/cron` hourly.
+- Your bot will respond to `/help`, `/latest`, and `/post_today` in real time via `/api/webhook`.
 
 ---
 
-## Installation & Setup
+## Local Development
 
 1. **Clone the repository:**
    ```bash
@@ -51,46 +87,16 @@ Authorized users (configured via `ALLOWED_USERS`) can interact with the bot usin
    npm install
    ```
 
-3. **Configure environment variables:**
-   Copy the example environment file and fill in your values:
+3. **Configure environment:**
    ```bash
    cp .env.example .env
    ```
+   Fill in your `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHANNEL_ID`, and `ALLOWED_USERS`.
 
-   Edit `.env`:
-   ```ini
-   # Telegram Bot API Token obtained from @BotFather
-   TELEGRAM_BOT_TOKEN=your-bot-token
-
-   # Target Telegram Channel ID or @username (e.g. -100xxxxxxxxxx or @your_channel_name)
-   TELEGRAM_CHANNEL_ID=your-channel-id
-
-   # Cron expression for automated checks (Default: every hour on the hour)
-   CRON_SCHEDULE=0 * * * *
-
-   # Check and post the latest APOD on startup if not already posted (true/false)
-   CHECK_ON_STARTUP=true
-
-   # Comma-separated list of Telegram User IDs authorized to use bot commands
-   ALLOWED_USERS=your-user-id-1,your-user-id-2
+4. **Run locally:**
+   ```bash
+   npm run dev
    ```
-
----
-
-## Running the Bot
-
-### Development Mode
-Runs the project with `nodemon` and `ts-node` for automatic reloading on code changes:
-```bash
-npm run dev
-```
-
-### Production Build & Run
-Compile TypeScript to JavaScript and run with Node:
-```bash
-npm run build
-npm start
-```
 
 ---
 
@@ -98,35 +104,30 @@ npm start
 
 ```text
 DrElitaBot/
+├── api/
+│   ├── cron.ts             # Vercel Cron scheduled endpoint (/api/cron)
+│   ├── set-webhook.ts      # 1-click Telegram webhook registration (/api/set-webhook)
+│   └── webhook.ts          # Telegram webhook update receiver (/api/webhook)
 ├── data/
-│   └── .gitkeep            # Persistent directory for runtime state (bot_state.json)
+│   └── .gitkeep            # Directory for local runtime state
 ├── src/
-│   ├── bot.ts              # Telegram bot instance, authorization middleware & command handlers
-│   ├── config.ts           # Environment variables configuration and validation
-│   ├── index.ts            # Application entry point and process lifecycle management
-│   ├── media.ts            # Image buffer fetcher and Grammy InputFile utility
-│   ├── poster.ts           # Channel publisher and single-message formatter
-│   ├── scheduler.ts        # node-cron scheduler for periodic APOD checks
-│   ├── scraper.ts          # Parser for NASA APOD Telegram channel web previews
-│   ├── state.ts            # Local JSON state manager for post deduplication
-│   └── types.ts            # TypeScript interfaces and data models
-├── .env.example            # Template for environment configuration
-├── .gitignore              # Git ignore rules for node_modules, build artifacts, and secrets
+│   ├── bot.ts              # Bot instance, whitelist middleware & commands
+│   ├── config.ts           # Environment variables configuration
+│   ├── index.ts            # Local standalone daemon entry point
+│   ├── media.ts            # Media buffer downloader & InputFile generator
+│   ├── poster.ts           # Channel publisher (single-message photo + caption)
+│   ├── scheduler.ts        # node-cron scheduler for standalone mode
+│   ├── scraper.ts          # APOD Telegram channel parser
+│   ├── state.ts            # State deduplication (local JSON + Upstash KV support)
+│   └── types.ts            # TypeScript interfaces
+├── .env.example            # Environment variables template
+├── .gitignore              # Git ignore rules
 ├── LICENSE                 # MIT License
-├── package.json            # Project dependencies and npm scripts
-├── tsconfig.json           # TypeScript compiler configuration (NodeNext)
+├── package.json            # Project dependencies and scripts
+├── tsconfig.json           # TypeScript configuration
+├── vercel.json             # Vercel Cron definitions
 └── README.md               # Project documentation
 ```
-
----
-
-## How It Works
-
-1. **Source**: Fetches recent public posts from `https://t.me/s/apod_telegram`.
-2. **Parser**: Extracts the APOD date, title, clean HTML explanation, clickable NASA URLs, and image/video sources.
-3. **Deduplication**: Compares against `data/bot_state.json`. If the post was already published, it skips posting.
-4. **Media Dispatch**: Downloads the image into memory and dispatches it via `bot.api.sendPhoto` along with the formatted caption in a single Telegram message.
-5. **Scheduler**: Automatically repeats this check every hour via `node-cron`.
 
 ---
 
