@@ -1,0 +1,35 @@
+{
+  "name": "DrElitaBot",
+  "version": "1.0.0",
+  "description": "Automated Telegram bot that monitors NASA Astronomy Picture of the Day (APOD) and forwards daily posts to your channel.",
+  "main": "dist/index.js",
+  "scripts": {
+    "dev": "nodemon",
+    "build": "tsc",
+    "start": "node dist/index.js"
+  },
+  "keywords": [
+    "telegram",
+    "bot",
+    "nasa",
+    "apod",
+    "forwarder",
+    "grammy",
+    "typescript"
+  ],
+  "author": "",
+  "license": "MIT",
+  "type": "commonjs",
+  "devDependencies": {
+    "@types/node": "^25.9.5",
+    "@types/node-cron": "^3.0.11",
+    "nodemon": "^3.1.14",
+    "ts-node": "^10.9.2",
+    "typescript": "^6.0.3"
+  },
+  "dependencies": {
+    "dotenv": "^17.4.2",
+    "grammy": "^1.45.1",
+    "node-cron": "^4.6.0"
+  }
+}
