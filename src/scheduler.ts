@@ -5,22 +5,28 @@ import { ChannelPoster } from "./poster";
 import { stateManager } from "./state";
 
 export async function checkAndPostApod(poster: ChannelPoster): Promise<void> {
-  console.log(`[${new Date().toISOString()}] [INFO] Checking @apod_telegram for new APOD posts...`);
+  const now = new Date();
+  console.log(`[${now.toISOString()}] [INFO] Checking @apod_telegram for new APOD posts (Timezone: ${config.timezone})...`);
   try {
     const posts = await fetchApodPosts();
     if (posts.length === 0) {
       console.log("[INFO] No APOD posts found in source channel.");
+      stateManager.saveState({});
       return;
     }
 
     const latest = posts[posts.length - 1];
-    console.log(`[INFO] Found latest APOD: [${latest.dateStr}] - "${latest.title}" (Post ID: ${latest.id})`);
+    console.log(`[INFO] Found latest APOD in source: [${latest.dateStr}] - "${latest.title}" (Post ID: ${latest.id})`);
 
-    if (stateManager.isAlreadyPosted(latest.id, latest.dateStr, latest.nasaUrl)) {
-      console.log(`[INFO] APOD post [${latest.dateStr}] (Post ID: ${latest.id}) is already posted. No new post to publish.`);
+    const evaluation = stateManager.evaluateApodPost(latest, false);
+    stateManager.saveState({});
+
+    if (!evaluation.shouldPost) {
+      console.log(`[INFO] [PASS] ${evaluation.message} Skipping.`);
       return;
     }
 
+    console.log(`[INFO] [MATCH] ${evaluation.message} Proceeding to publish.`);
     await poster.postToChannel(latest, false);
   } catch (err: any) {
     console.error("[ERROR] Error during scheduled APOD check:", err?.message || err);

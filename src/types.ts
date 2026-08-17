@@ -29,4 +29,21 @@ export interface BotConfig {
   checkOnStartup: boolean;
   stateFilePath: string;
   allowedUsers: number[];
+  timezone?: string;
+}
+
+export type ApodEvaluationReason =
+  | "new_post"
+  | "already_posted"
+  | "stale_data"
+  | "forced"
+  | "invalid";
+
+export interface ApodEvaluation {
+  shouldPost: boolean;
+  reason: ApodEvaluationReason;
+  message: string;
+  postIsoDate: string;
+  todayIso: string;
+  validTodayIsoDates: string[];
 }

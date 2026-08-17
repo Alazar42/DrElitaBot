@@ -23,9 +23,12 @@ export class ChannelPoster {
       throw new Error("Cannot post: TELEGRAM_CHANNEL_ID is not configured in .env");
     }
 
-    if (!force && stateManager.isAlreadyPosted(post.id, post.dateStr, post.nasaUrl)) {
-      console.log(`[INFO] APOD post ${post.id} (${post.dateStr}) is already posted. Skipping.`);
-      return false;
+    if (!force) {
+      const evaluation = stateManager.evaluateApodPost(post, false);
+      if (!evaluation.shouldPost) {
+        console.log(`[INFO] [PASS] ${evaluation.message} Skipping posting.`);
+        return false;
+      }
     }
 
     console.log(`[INFO] Processing and posting APOD post ${post.id} (${post.dateStr} - "${post.title}") in one single post to ${this.channelId}...`);

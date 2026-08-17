@@ -45,6 +45,8 @@ const allowedUsers: number[] = rawAllowedUsers
   .map((id) => parseInt(id.trim(), 10))
   .filter((id) => !isNaN(id));
 
+const timezone = process.env.TIMEZONE || process.env.TZ || Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
+
 if (!botToken) {
   console.warn("[WARN] TELEGRAM_BOT_TOKEN is not set in .env");
 }
@@ -60,4 +62,5 @@ export const config: BotConfig = {
   checkOnStartup,
   stateFilePath,
   allowedUsers,
+  timezone,
 };

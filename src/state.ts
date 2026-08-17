@@ -1,6 +1,6 @@
 import fs from "fs";
 import path from "path";
-import { BotState } from "./types";
+import { ApodEvaluation, ApodPost, BotState } from "./types";
 import { config } from "./config";
 
 const MONTH_NAMES = [
@@ -19,24 +19,52 @@ const MONTH_NAMES = [
 ];
 
 /**
- * Normalizes an APOD date string (e.g. "2026 August 17") or NASA APOD URL (e.g. ap260817.html)
- * into a standardized ISO date string "YYYY-MM-DD".
+ * Normalizes an APOD date string (e.g. "2026 August 17", "August 17, 2026", "2026-08-17")
+ * or NASA APOD URL (e.g. ap260817.html) into a standardized ISO date string "YYYY-MM-DD".
  */
 export function normalizeApodDateToIso(dateStr?: string, nasaUrl?: string): string {
   if (dateStr) {
-    const match = dateStr.match(/(\d{4})\s+([A-Za-z]+)\s+(\d{1,2})/);
-    if (match) {
-      const year = match[1];
-      const monthIdx = MONTH_NAMES.findIndex((m) => m.toLowerCase() === match[2].toLowerCase());
-      const day = match[3].padStart(2, "0");
+    const cleanStr = dateStr.trim();
+
+    // Direct ISO format: YYYY-MM-DD
+    if (/^\d{4}-\d{2}-\d{2}$/.test(cleanStr)) {
+      return cleanStr;
+    }
+
+    // Format: "YYYY Month DD" (e.g. "2026 August 17")
+    const matchYMD = cleanStr.match(/(\d{4})\s+([A-Za-z]+)\s+(\d{1,2})/);
+    if (matchYMD) {
+      const year = matchYMD[1];
+      const monthIdx = MONTH_NAMES.findIndex((m) => m.toLowerCase() === matchYMD[2].toLowerCase());
+      const day = matchYMD[3].padStart(2, "0");
       if (monthIdx !== -1) {
         const month = String(monthIdx + 1).padStart(2, "0");
         return `${year}-${month}-${day}`;
       }
     }
 
-    if (/^\d{4}-\d{2}-\d{2}$/.test(dateStr.trim())) {
-      return dateStr.trim();
+    // Format: "Month DD, YYYY" or "Month DD YYYY" (e.g. "August 17, 2026")
+    const matchMDY = cleanStr.match(/([A-Za-z]+)\s+(\d{1,2}),?\s+(\d{4})/);
+    if (matchMDY) {
+      const monthIdx = MONTH_NAMES.findIndex((m) => m.toLowerCase() === matchMDY[1].toLowerCase());
+      const day = matchMDY[2].padStart(2, "0");
+      const year = matchMDY[3];
+      if (monthIdx !== -1) {
+        const month = String(monthIdx + 1).padStart(2, "0");
+        return `${year}-${month}-${day}`;
+      }
+    }
+
+    // Format: "DD Month YYYY" (e.g. "17 August 2026")
+    const matchDMY = cleanStr.match(/(\d{1,2})\s+([A-Za-z]+)\s+(\d{4})/);
+    if (matchDMY) {
+      const day = matchDMY[1].padStart(2, "0");
+      const monthIdx = MONTH_NAMES.findIndex((m) => m.toLowerCase() === matchDMY[2].toLowerCase());
+      const year = matchDMY[3];
+      if (monthIdx !== -1) {
+        const month = String(monthIdx + 1).padStart(2, "0");
+        return `${year}-${month}-${day}`;
+      }
     }
   }
 
@@ -54,22 +82,38 @@ export function normalizeApodDateToIso(dateStr?: string, nasaUrl?: string): stri
 }
 
 /**
- * Returns today's ISO dates (YYYY-MM-DD) in both UTC and local timezone.
+ * Returns today's ISO date (YYYY-MM-DD) formatted for a given timezone.
  */
-export function getTodayIsoDates(): string[] {
+export function getIsoDateInTimezone(date: Date = new Date(), timeZone?: string): string {
+  try {
+    const tz = timeZone || config.timezone || Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
+    const formatter = new Intl.DateTimeFormat("en-CA", {
+      timeZone: tz,
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+    });
+    return formatter.format(date);
+  } catch {
+    const y = date.getFullYear();
+    const m = String(date.getMonth() + 1).padStart(2, "0");
+    const d = String(date.getDate()).padStart(2, "0");
+    return `${y}-${m}-${d}`;
+  }
+}
+
+/**
+ * Returns today's ISO dates (YYYY-MM-DD) across local/configured timezone, UTC, and NASA (America/New_York).
+ */
+export function getTodayIsoDates(configuredTz?: string): string[] {
   const now = new Date();
+  const tz = configuredTz || config.timezone;
 
-  const utcYear = now.getUTCFullYear();
-  const utcMonth = String(now.getUTCMonth() + 1).padStart(2, "0");
-  const utcDay = String(now.getUTCDate()).padStart(2, "0");
-  const utcIso = `${utcYear}-${utcMonth}-${utcDay}`;
+  const localIso = getIsoDateInTimezone(now, tz);
+  const utcIso = getIsoDateInTimezone(now, "UTC");
+  const nasaIso = getIsoDateInTimezone(now, "America/New_York");
 
-  const localYear = now.getFullYear();
-  const localMonth = String(now.getMonth() + 1).padStart(2, "0");
-  const localDay = String(now.getDate()).padStart(2, "0");
-  const localIso = `${localYear}-${localMonth}-${localDay}`;
-
-  return Array.from(new Set([utcIso, localIso]));
+  return Array.from(new Set([localIso, utcIso, nasaIso]));
 }
 
 const defaultState: BotState = {
@@ -211,6 +255,31 @@ export class StateManager {
   }
 
   /**
+   * Records a date as already posted (e.g. from existing channel posts).
+   */
+  public markDateAsPosted(dateStr: string, nasaUrl?: string, postId?: string): void {
+    const isoDate = normalizeApodDateToIso(dateStr, nasaUrl);
+    const existingIds = this.state.postedIds || [];
+    const existingDates = this.state.postedDates || [];
+    const existingIsoDates = this.state.postedIsoDates || [];
+
+    const updatedIds = postId ? [postId, ...existingIds.filter((id) => id !== postId)].slice(0, 100) : existingIds;
+    const updatedDates = [dateStr, ...existingDates.filter((d) => d !== dateStr)].slice(0, 100);
+    const updatedIsoDates = isoDate
+      ? [isoDate, ...existingIsoDates.filter((d) => d !== isoDate)].slice(0, 100)
+      : existingIsoDates;
+
+    this.saveState({
+      lastPostedId: postId || this.state.lastPostedId,
+      lastPostedDate: dateStr || this.state.lastPostedDate,
+      lastPostedIsoDate: isoDate || this.state.lastPostedIsoDate,
+      postedIds: updatedIds,
+      postedDates: updatedDates,
+      postedIsoDates: updatedIsoDates,
+    });
+  }
+
+  /**
    * Checks if a post has already been posted based on its post ID, date string, or NASA URL.
    */
   public isAlreadyPosted(postId: string, dateStr?: string, nasaUrl?: string): boolean {
@@ -261,11 +330,88 @@ export class StateManager {
   }
 
   /**
-   * Checks if today's APOD has already been posted (evaluating both UTC and local timezone).
+   * Checks if today's APOD has already been posted across local timezone, UTC, and NASA Eastern time.
    */
   public isTodayAlreadyPosted(): boolean {
     const todayIsos = getTodayIsoDates();
     return todayIsos.some((todayIso) => this.isDateAlreadyPosted(todayIso));
+  }
+
+  /**
+   * Cross-checks an APOD post against the current calendar day and state.
+   * Determines if the post is:
+   * - Already posted to the channel
+   * - Stale/yesterday's data (when new post for today is not yet out)
+   * - A valid new post for today
+   * - Forced by manual override
+   */
+  public evaluateApodPost(post: ApodPost, force: boolean = false): ApodEvaluation {
+    const localTodayIso = getIsoDateInTimezone(new Date(), config.timezone);
+    const validTodayIsoDates = getTodayIsoDates(config.timezone);
+    const postIsoDate = normalizeApodDateToIso(post.dateStr, post.nasaUrl);
+
+    if (!postIsoDate) {
+      return {
+        shouldPost: false,
+        reason: "invalid",
+        message: `Could not parse date for post ID ${post.id} ("${post.dateStr}").`,
+        postIsoDate: "",
+        todayIso: localTodayIso,
+        validTodayIsoDates,
+      };
+    }
+
+    if (force) {
+      return {
+        shouldPost: true,
+        reason: "forced",
+        message: `Manual force post approved for APOD [${post.dateStr}] (ID: ${post.id}, ISO: ${postIsoDate}).`,
+        postIsoDate,
+        todayIso: localTodayIso,
+        validTodayIsoDates,
+      };
+    }
+
+    // 1. Check if post has already been posted to the channel
+    if (this.isAlreadyPosted(post.id, post.dateStr, post.nasaUrl)) {
+      return {
+        shouldPost: false,
+        reason: "already_posted",
+        message: `APOD post [${post.dateStr}] (ID: ${post.id}, ISO: ${postIsoDate}) has already been posted to the channel.`,
+        postIsoDate,
+        todayIso: localTodayIso,
+        validTodayIsoDates,
+      };
+    }
+
+    // 2. Cross-check date: Is this post actually for today, or is it older/yesterday's data?
+    const isTodayPost = validTodayIsoDates.includes(postIsoDate);
+    const isPastDate = postIsoDate < localTodayIso;
+
+    if (!isTodayPost && isPastDate) {
+      // It's a post from a previous day (e.g. yesterday August 17 when today is August 18)
+      // Automatically register the post in state so it doesn't get repeatedly re-evaluated on fresh restarts
+      this.markDateAsPosted(post.dateStr, post.nasaUrl, post.id);
+
+      return {
+        shouldPost: false,
+        reason: "stale_data",
+        message: `Current local date is ${localTodayIso}, but the latest post in @apod_telegram is from ${post.dateStr} (${postIsoDate}). Today's APOD has not been published by NASA yet.`,
+        postIsoDate,
+        todayIso: localTodayIso,
+        validTodayIsoDates,
+      };
+    }
+
+    // 3. Post is matching today's date and has not been posted yet
+    return {
+      shouldPost: true,
+      reason: "new_post",
+      message: `Found new APOD post for today [${post.dateStr}] (ID: ${post.id}, ISO: ${postIsoDate}) - "${post.title}".`,
+      postIsoDate,
+      todayIso: localTodayIso,
+      validTodayIsoDates,
+    };
   }
 }
 
