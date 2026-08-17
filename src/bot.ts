@@ -3,6 +3,8 @@ import { config } from "./config";
 import { getLatestApodPost } from "./scraper";
 import { ChannelPoster } from "./poster";
 import { fetchMediaAsInputFile } from "./media";
+import { stateManager } from "./state";
+import { formatSinglePostCaption } from "./caption";
 
 export function createBot(): { bot: Bot; poster: ChannelPoster } {
   if (!config.botToken) {
@@ -69,37 +71,43 @@ Monitors <a href="https://t.me/apod_telegram">@apod_telegram</a> and forwards da
         return;
       }
 
-      const mediaUrl = post.photoUrl || post.hdUrl;
-      let sentMedia = false;
+      const caption = formatSinglePostCaption(post);
 
-      if (mediaUrl) {
-        const inputFile = await fetchMediaAsInputFile(mediaUrl, "apod.jpg");
+      // 1. Process & download image: try NASA HD image first, then Telegram preview photo
+      const primaryPhotoUrl = post.hdUrl && post.hdUrl.match(/\.(jpe?g|png|webp)($|\?)/i) ? post.hdUrl : post.photoUrl;
+      const fallbackPhotoUrl = post.photoUrl || post.hdUrl;
+      const targetPhotoUrl = primaryPhotoUrl || fallbackPhotoUrl;
+
+      if (targetPhotoUrl) {
+        let inputFile = await fetchMediaAsInputFile(targetPhotoUrl, "apod.jpg");
+        if (!inputFile && fallbackPhotoUrl && fallbackPhotoUrl !== targetPhotoUrl) {
+          inputFile = await fetchMediaAsInputFile(fallbackPhotoUrl, "apod.jpg");
+        }
+
         if (inputFile) {
-          try {
-            await ctx.replyWithPhoto(inputFile, {
-              caption: post.cleanHtml,
-              parse_mode: "HTML",
-            });
-            sentMedia = true;
-          } catch (photoErr) {
-            console.warn("[WARN] replyWithPhoto failed, falling back to message with preview:", photoErr);
-          }
+          // Send all in one single photo post
+          await ctx.replyWithPhoto(inputFile, {
+            caption,
+            parse_mode: "HTML",
+          });
+          return;
         }
       }
 
-      if (!sentMedia) {
-        await ctx.reply(post.cleanHtml, {
+      // 2. If video exists
+      if (post.videoUrl) {
+        await ctx.replyWithVideo(post.videoUrl, {
+          caption,
           parse_mode: "HTML",
-          link_preview_options: post.photoUrl
-            ? {
-                is_disabled: false,
-                url: post.photoUrl,
-                prefer_large_media: true,
-                show_above_text: true,
-              }
-            : { is_disabled: false },
         });
+        return;
       }
+
+      // 3. Fallback: text only
+      await ctx.reply(post.cleanHtml, {
+        parse_mode: "HTML",
+        link_preview_options: { is_disabled: false },
+      });
     } catch (err: any) {
       console.error("[ERROR] Failed handling /latest command:", err);
       await ctx.reply(`Error fetching latest APOD: ${err?.message || err}`);
@@ -121,6 +129,13 @@ Monitors <a href="https://t.me/apod_telegram">@apod_telegram</a> and forwards da
       const post = await getLatestApodPost();
       if (!post) {
         await ctx.reply("Could not find any APOD post to publish.");
+        return;
+      }
+
+      if (stateManager.isAlreadyPosted(post.id, post.dateStr, post.nasaUrl)) {
+        await ctx.reply(`APOD [${post.dateStr}] - "<b>${post.title}</b>" is already posted to the channel.`, {
+          parse_mode: "HTML",
+        });
         return;
       }
 

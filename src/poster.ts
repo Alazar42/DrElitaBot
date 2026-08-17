@@ -3,6 +3,7 @@ import { ApodPost } from "./types";
 import { config } from "./config";
 import { stateManager } from "./state";
 import { fetchMediaAsInputFile } from "./media";
+import { formatSinglePostCaption } from "./caption";
 
 export class ChannelPoster {
   private bot: Bot;
@@ -22,32 +23,35 @@ export class ChannelPoster {
       throw new Error("Cannot post: TELEGRAM_CHANNEL_ID is not configured in .env");
     }
 
-    if (!force && stateManager.isAlreadyPosted(post.id, post.dateStr)) {
+    if (!force && stateManager.isAlreadyPosted(post.id, post.dateStr, post.nasaUrl)) {
       console.log(`[INFO] APOD post ${post.id} (${post.dateStr}) is already posted. Skipping.`);
       return false;
     }
 
-    console.log(`[INFO] Posting APOD post ${post.id} (${post.dateStr} - "${post.title}") to ${this.channelId}...`);
+    console.log(`[INFO] Processing and posting APOD post ${post.id} (${post.dateStr} - "${post.title}") in one single post to ${this.channelId}...`);
 
     try {
-      const htmlLength = post.cleanHtml.length;
       let sent = false;
+      const caption = formatSinglePostCaption(post);
 
-      const mediaUrl = post.photoUrl || post.hdUrl;
+      // 1. Process & download image: try NASA HD image first, then Telegram channel photo
+      const primaryPhotoUrl = post.hdUrl && post.hdUrl.match(/\.(jpe?g|png|webp)($|\?)/i) ? post.hdUrl : post.photoUrl;
+      const fallbackPhotoUrl = post.photoUrl || post.hdUrl;
+      const targetPhotoUrl = primaryPhotoUrl || fallbackPhotoUrl;
 
-      // 1. If photo exists, download and send buffer via InputFile with full caption
-      if (mediaUrl) {
-        const inputFile = await fetchMediaAsInputFile(mediaUrl, "apod.jpg");
+      if (targetPhotoUrl) {
+        let inputFile = await fetchMediaAsInputFile(targetPhotoUrl, "apod.jpg");
+        if (!inputFile && fallbackPhotoUrl && fallbackPhotoUrl !== targetPhotoUrl) {
+          inputFile = await fetchMediaAsInputFile(fallbackPhotoUrl, "apod.jpg");
+        }
+
         if (inputFile) {
-          try {
-            await this.bot.api.sendPhoto(this.channelId, inputFile, {
-              caption: post.cleanHtml,
-              parse_mode: "HTML",
-            });
-            sent = true;
-          } catch (photoErr) {
-            console.warn("[WARN] sendPhoto with InputFile failed, trying fallback:", photoErr);
-          }
+          // Send photo with complete caption in a SINGLE post
+          await this.bot.api.sendPhoto(this.channelId, inputFile, {
+            caption,
+            parse_mode: "HTML",
+          });
+          sent = true;
         }
       }
 
@@ -55,7 +59,7 @@ export class ChannelPoster {
       if (!sent && post.videoUrl) {
         try {
           await this.bot.api.sendVideo(this.channelId, post.videoUrl, {
-            caption: post.cleanHtml,
+            caption,
             parse_mode: "HTML",
           });
           sent = true;
@@ -64,54 +68,31 @@ export class ChannelPoster {
         }
       }
 
-      // 3. Fallback: text only with link preview if neither photo nor video was sent
+      // 3. Fallback: single text message if media could not be fetched
       if (!sent) {
-        const previewUrl = post.photoUrl || post.hdUrl || post.nasaUrl;
         await this.bot.api.sendMessage(this.channelId, post.cleanHtml, {
           parse_mode: "HTML",
-          link_preview_options: previewUrl
-            ? {
-                is_disabled: false,
-                url: previewUrl,
-                prefer_large_media: true,
-                show_above_text: true,
-              }
-            : { is_disabled: false },
+          link_preview_options: { is_disabled: false },
         });
         sent = true;
       }
 
-      // Update state upon success
-      stateManager.saveState({
-        lastPostedId: post.id,
-        lastPostedDate: post.dateStr,
-      });
+      // Update state upon success with complete history
+      stateManager.savePosted(post);
 
-      console.log(`[SUCCESS] Successfully posted APOD [${post.dateStr}] to ${this.channelId}`);
+      console.log(`[SUCCESS] Successfully posted APOD [${post.dateStr}] in one single post to ${this.channelId}`);
       return true;
     } catch (err: any) {
       console.error(`[ERROR] Failed to post APOD [${post.dateStr}] to channel:`, err?.message || err);
 
-      // If HTML parsing failed on Telegram side, try fallback to plain text
+      // If HTML parsing failed on Telegram side, try fallback to plain text in a single post
       if (err?.description?.includes("can't parse entities")) {
         console.log("[INFO] Retrying with plain text format...");
         try {
           const plainText = `${post.dateStr} - ${post.nasaUrl}\n\n${post.rawText}`;
-          await this.bot.api.sendMessage(this.channelId, plainText, {
-            link_preview_options: post.photoUrl
-              ? {
-                  is_disabled: false,
-                  url: post.photoUrl,
-                  prefer_large_media: true,
-                  show_above_text: true,
-                }
-              : undefined,
-          });
+          await this.bot.api.sendMessage(this.channelId, plainText);
 
-          stateManager.saveState({
-            lastPostedId: post.id,
-            lastPostedDate: post.dateStr,
-          });
+          stateManager.savePosted(post);
           console.log(`[SUCCESS] Posted fallback plain text to ${this.channelId}`);
           return true;
         } catch (retryErr) {

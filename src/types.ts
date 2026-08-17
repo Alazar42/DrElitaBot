@@ -14,7 +14,12 @@ export interface ApodPost {
 export interface BotState {
   lastPostedId: string | null;
   lastPostedDate: string | null;
+  lastPostedIsoDate?: string | null;
   lastCheckedAt: string | null;
+  lastPostedAt?: string | null;
+  postedIds?: string[];
+  postedDates?: string[];
+  postedIsoDates?: string[];
 }
 
 export interface BotConfig {

@@ -2,6 +2,7 @@ import cron, { ScheduledTask } from "node-cron";
 import { config } from "./config";
 import { fetchApodPosts } from "./scraper";
 import { ChannelPoster } from "./poster";
+import { stateManager } from "./state";
 
 export async function checkAndPostApod(poster: ChannelPoster): Promise<void> {
   console.log(`[${new Date().toISOString()}] [INFO] Checking @apod_telegram for new APOD posts...`);
@@ -15,6 +16,11 @@ export async function checkAndPostApod(poster: ChannelPoster): Promise<void> {
     const latest = posts[posts.length - 1];
     console.log(`[INFO] Found latest APOD: [${latest.dateStr}] - "${latest.title}" (Post ID: ${latest.id})`);
 
+    if (stateManager.isAlreadyPosted(latest.id, latest.dateStr, latest.nasaUrl)) {
+      console.log(`[INFO] APOD post [${latest.dateStr}] (Post ID: ${latest.id}) is already posted. No new post to publish.`);
+      return;
+    }
+
     await poster.postToChannel(latest, false);
   } catch (err: any) {
     console.error("[ERROR] Error during scheduled APOD check:", err?.message || err);
@@ -23,7 +29,7 @@ export async function checkAndPostApod(poster: ChannelPoster): Promise<void> {
 
 export function startScheduler(poster: ChannelPoster): ScheduledTask {
   console.log(`[INFO] Starting cron scheduler with schedule: "${config.cronSchedule}"`);
-  
+
   const task = cron.schedule(config.cronSchedule, async () => {
     await checkAndPostApod(poster);
   });

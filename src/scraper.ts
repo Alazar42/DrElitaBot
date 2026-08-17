@@ -34,9 +34,12 @@ export function parseApodPost(block: string): ApodPost | null {
   if (!textMatch) return null;
   const rawHtml = textMatch[1];
 
+  // Format clean HTML for Telegram Bot API first
+  const cleanHtml = cleanTelegramHtml(rawHtml);
+
   // Match the date header link: [YYYY Month DD](https://apod.nasa.gov/apod/ap...)
   // e.g. <a href="https://apod.nasa.gov/apod/ap260816.html">2026 August 16</a>
-  const dateMatch = rawHtml.match(/<a\s+[^>]*href="(https:\/\/apod\.nasa\.gov\/apod\/ap[^"]+\.html)"[^>]*>(\d{4}\s+[A-Za-z]+\s+\d{1,2})<\/a>/i);
+  const dateMatch = cleanHtml.match(/<a\s+href="(https:\/\/apod\.nasa\.gov\/apod\/ap[^"]+\.html)">(\d{4}\s+[A-Za-z]+\s+\d{1,2})<\/a>/i);
   
   let nasaUrl = "";
   let dateStr = "";
@@ -46,7 +49,7 @@ export function parseApodPost(block: string): ApodPost | null {
     dateStr = dateMatch[2];
   } else {
     // Fallback: check if any link has the "YYYY Month DD" pattern
-    const fallbackMatch = rawHtml.match(/<a\s+[^>]*href="([^"]+)"[^>]*>(\d{4}\s+[A-Za-z]+\s+\d{1,2})<\/a>/i);
+    const fallbackMatch = cleanHtml.match(/<a\s+href="([^"]+)">(\d{4}\s+[A-Za-z]+\s+\d{1,2})<\/a>/i);
     if (!fallbackMatch) {
       return null;
     }
@@ -62,16 +65,22 @@ export function parseApodPost(block: string): ApodPost | null {
   const videoMatch = block.match(/<video[^>]*src="([^"]+)"/);
   const videoUrl = videoMatch ? videoMatch[1] : undefined;
 
-  // Extract HD image/video link if present
-  const hdMatch = rawHtml.match(/<a\s+[^>]*href="([^"]+)"[^>]*><b><i>HD<\/i><\/b><\/a>|<a\s+[^>]*href="([^"]+)"[^>]*><b><i>Annotated<\/i><\/b><\/a>|<a\s+[^>]*href="([^"]+)"[^>]*>[^<]*HD[^<]*<\/a>/i);
-  const hdUrl = hdMatch ? (hdMatch[1] || hdMatch[2] || hdMatch[3]) : undefined;
+  // Scan links to extract HD/Annotated and Discuss URLs accurately
+  let hdUrl: string | undefined;
+  let discussUrl: string | undefined;
+  const linkRegex = /<a\s+href="([^"]+)">([\s\S]*?)<\/a>/gi;
+  let linkMatch: RegExpExecArray | null;
 
-  // Extract Discuss link if present
-  const discussMatch = rawHtml.match(/<a\s+[^>]*href="([^"]+)"[^>]*><b><i>Discuss<\/i><\/b><\/a>|<a\s+[^>]*href="([^"]+)"[^>]*>[^<]*Discuss[^<]*<\/a>/i);
-  const discussUrl = discussMatch ? (discussMatch[1] || discussMatch[2]) : undefined;
+  while ((linkMatch = linkRegex.exec(cleanHtml)) !== null) {
+    const href = linkMatch[1];
+    const linkText = linkMatch[2].replace(/<[^>]+>/g, "").trim().toLowerCase();
 
-  // Format clean HTML for Telegram Bot API
-  const cleanHtml = cleanTelegramHtml(rawHtml);
+    if (linkText === "hd" || linkText === "annotated") {
+      hdUrl = href;
+    } else if (linkText === "discuss") {
+      discussUrl = href;
+    }
+  }
 
   // Extract Title (typically in the <b> tag after the date header)
   let title = "";
