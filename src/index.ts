@@ -1,34 +1,30 @@
 import { config } from "./config";
 import { createBot } from "./bot";
-import { startScheduler, checkAndPostApod } from "./scheduler";
 
 async function main() {
-  console.log("[INFO] Starting DrElitaBot APOD Forwarder...");
+  console.log("[INFO] Starting DrElitaBot APOD Forwarder (Manual Mode)...");
 
   if (!config.botToken) {
     console.error("[FATAL] TELEGRAM_BOT_TOKEN is not defined in .env. Exiting.");
     process.exit(1);
   }
 
-  const { bot, poster } = createBot();
+  const { bot } = createBot();
 
-  // Run initial check on startup if enabled and channel is set
-  if (config.checkOnStartup) {
-    if (config.channelId) {
-      console.log("[INFO] Performing initial check on startup...");
-      await checkAndPostApod(poster);
-    } else {
-      console.log("[INFO] Skipping startup post check because TELEGRAM_CHANNEL_ID is not configured in .env yet.");
-    }
+  // Register command list with Telegram
+  try {
+    await bot.api.setMyCommands([
+      { command: "latest", description: "Preview latest NASA APOD with Post / Cancel buttons" },
+      { command: "help", description: "Show bot information and available commands" },
+    ]);
+    console.log("[INFO] Telegram command menu registered successfully (/latest, /help).");
+  } catch (cmdErr) {
+    console.warn("[WARN] Could not register bot command list with Telegram:", cmdErr);
   }
-
-  // Start cron scheduler
-  const cronTask = startScheduler(poster);
 
   // Graceful shutdown
   const shutdown = () => {
     console.log("\n[INFO] Stopping DrElitaBot...");
-    cronTask.stop();
     bot.stop();
     process.exit(0);
   };
@@ -37,10 +33,10 @@ async function main() {
   process.once("SIGTERM", shutdown);
 
   // Start bot long polling for commands
-  console.log(`[INFO] DrElitaBot is now listening for commands (Whitelisted users: ${config.allowedUsers.join(", ") || "All"}).`);
+  console.log(`[INFO] DrElitaBot is now listening for commands: /latest, /help (Whitelisted users: ${config.allowedUsers.join(", ") || "All"}).`);
   await bot.start({
     onStart: (botInfo) => {
-      console.log(`[INFO] Bot @${botInfo.username} started successfully.`);
+      console.log(`[INFO] Bot @${botInfo.username} started successfully in manual posting mode.`);
     },
   });
 }

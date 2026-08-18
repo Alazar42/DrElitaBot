@@ -1,4 +1,4 @@
-import { Bot } from "grammy";
+import { Bot, InlineKeyboard } from "grammy";
 import { config } from "./config";
 import { getLatestApodPost } from "./scraper";
 import { ChannelPoster } from "./poster";
@@ -46,9 +46,10 @@ export function createBot(): { bot: Bot; poster: ChannelPoster } {
     const messageText = ctx.message?.text || ctx.message?.caption || "";
     const isCommand = messageText.startsWith("/");
     const isPrivate = ctx.chat?.type === "private";
+    const isCallback = Boolean(ctx.callbackQuery);
 
-    // Ignore regular conversation/posts in groups and supergroups that are not commands
-    if (!isCommand && !isPrivate) {
+    // Ignore regular conversation/posts in groups and supergroups that are not commands or callbacks
+    if (!isCommand && !isPrivate && !isCallback) {
       return;
     }
 
@@ -56,8 +57,13 @@ export function createBot(): { bot: Bot; poster: ChannelPoster } {
 
     if (config.allowedUsers.length > 0) {
       if (!userId || !config.allowedUsers.includes(userId)) {
-        console.warn(`[AUTH] Unauthorized command attempt from User ID: ${userId || "unknown"} (@${ctx.from?.username || "none"})`);
-        if (isPrivate || isCommand) {
+        console.warn(`[AUTH] Unauthorized attempt from User ID: ${userId || "unknown"} (@${ctx.from?.username || "none"})`);
+        if (isCallback) {
+          await ctx.answerCallbackQuery({
+            text: "Access denied. You are not authorized to use this bot.",
+            show_alert: true,
+          });
+        } else if (isPrivate || isCommand) {
           await ctx.reply("Access denied. You are not authorized to use this bot.");
         }
         return;
@@ -69,14 +75,12 @@ export function createBot(): { bot: Bot; poster: ChannelPoster } {
 
   // Command: /start & /help
   bot.command(["start", "help"], async (ctx) => {
-    const helpMessage = `<b>DrElitaBot - NASA APOD Forwarder</b>
-Monitors <a href="https://t.me/apod_telegram">@apod_telegram</a> and forwards daily NASA Astronomy Picture of the Day posts directly to your channel.
-
-<b>Commands:</b>
-/post_today - Check and post today's APOD to your channel (skips if today's APOD is not published yet or already posted)
-/post_today force - Force post the latest APOD regardless of date/state
-/latest - Preview the latest APOD post in chat
-/help - Show this help message`;
+    const helpMessage =
+      `🌌 <b>DrElitaBot - NASA APOD Forwarder</b>\n\n` +
+      `Monitors <a href="https://t.me/apod_telegram">@apod_telegram</a> and enables manual review and forwarding of daily NASA Astronomy Picture of the Day posts directly to your channel.\n\n` +
+      `<b>Available Commands:</b>\n` +
+      `🚀 <b>/latest</b> - Fetch today's APOD post with <b>Post to Channel</b> and <b>Cancel</b> buttons\n` +
+      `ℹ️ <b>/help</b> - Show this help message and instructions`;
 
     await ctx.reply(helpMessage, {
       parse_mode: "HTML",
@@ -86,11 +90,11 @@ Monitors <a href="https://t.me/apod_telegram">@apod_telegram</a> and forwards da
 
   // Command: /latest
   bot.command("latest", async (ctx) => {
-    await ctx.reply("Fetching latest APOD post from @apod_telegram...");
+    await ctx.reply("🛰️ Fetching latest APOD post from @apod_telegram...");
     try {
       const post = await getLatestApodPost();
       if (!post) {
-        await ctx.reply("No APOD post found in recent messages.");
+        await ctx.reply("❌ No APOD post found in recent messages.");
         return;
       }
 
@@ -106,6 +110,11 @@ Monitors <a href="https://t.me/apod_telegram">@apod_telegram</a> and forwards da
 
       const caption = formatSinglePostCaption(post) + statusBadge;
 
+      // Create interactive Inline Keyboard with emojis
+      const keyboard = new InlineKeyboard()
+        .text("🚀 Post to Channel", `post_apod:${post.id}`)
+        .text("❌ Cancel", `cancel_apod:${post.id}`);
+
       // 1. Process & download image: try NASA HD image first, then Telegram preview photo
       const primaryPhotoUrl = post.hdUrl && post.hdUrl.match(/\.(jpe?g|png|webp)($|\?)/i) ? post.hdUrl : post.photoUrl;
       const fallbackPhotoUrl = post.photoUrl || post.hdUrl;
@@ -118,10 +127,11 @@ Monitors <a href="https://t.me/apod_telegram">@apod_telegram</a> and forwards da
         }
 
         if (inputFile) {
-          // Send all in one single photo post
+          // Send photo with caption and inline keyboard
           await ctx.replyWithPhoto(inputFile, {
             caption,
             parse_mode: "HTML",
+            reply_markup: keyboard,
           });
           return;
         }
@@ -132,6 +142,7 @@ Monitors <a href="https://t.me/apod_telegram">@apod_telegram</a> and forwards da
         await ctx.replyWithVideo(post.videoUrl, {
           caption,
           parse_mode: "HTML",
+          reply_markup: keyboard,
         });
         return;
       }
@@ -140,71 +151,62 @@ Monitors <a href="https://t.me/apod_telegram">@apod_telegram</a> and forwards da
       await ctx.reply(post.cleanHtml + statusBadge, {
         parse_mode: "HTML",
         link_preview_options: { is_disabled: false },
+        reply_markup: keyboard,
       });
     } catch (err: any) {
       console.error("[ERROR] Failed handling /latest command:", err);
-      await ctx.reply(`Error fetching latest APOD: ${err?.message || err}`);
+      await ctx.reply(`❌ Error fetching latest APOD: ${err?.message || err}`);
     }
   });
 
-  // Command: /post_today
-  bot.command("post_today", async (ctx) => {
+  // Callback Query Handler: Post to channel
+  bot.callbackQuery(/^post_apod(?::(.+))?$/, async (ctx) => {
     if (!config.channelId) {
-      await ctx.reply("TELEGRAM_CHANNEL_ID is not configured in your .env file.");
+      await ctx.answerCallbackQuery({
+        text: "TELEGRAM_CHANNEL_ID is not configured in .env",
+        show_alert: true,
+      });
+      await ctx.reply("❌ Cannot post: TELEGRAM_CHANNEL_ID is not configured in your .env file.");
       return;
     }
 
-    const rawMatch = ctx.match || "";
-    const isForce = rawMatch.toString().toLowerCase().includes("force") ||
-      (ctx.message?.text || "").toLowerCase().includes("force");
-
-    await ctx.reply(`Checking APOD for today (${config.timezone})...`, {
-      parse_mode: "HTML",
-    });
+    await ctx.answerCallbackQuery({ text: "🚀 Publishing APOD to channel..." });
 
     try {
       const post = await getLatestApodPost();
       if (!post) {
-        await ctx.reply("Could not find any APOD post in @apod_telegram.");
+        await ctx.reply("❌ Could not retrieve latest APOD post details.");
         return;
       }
 
-      const evaluation = stateManager.evaluateApodPost(post, isForce);
+      // Remove inline buttons to prevent duplicate triggers
+      await ctx.editMessageReplyMarkup({ reply_markup: undefined }).catch(() => {});
 
-      if (!evaluation.shouldPost) {
-        if (evaluation.reason === "already_posted") {
-          await ctx.reply(`APOD [${post.dateStr}] - "<b>${post.title}</b>" is already posted to the channel.`, {
-            parse_mode: "HTML",
-          });
-          return;
-        }
-
-        if (evaluation.reason === "stale_data") {
-          await ctx.reply(
-            `Today is <b>${evaluation.todayIso}</b>, but the latest post in @apod_telegram is from <b>${post.dateStr}</b> (${evaluation.postIsoDate}).\n\n` +
-            `NASA has not published today's APOD yet.\n\n` +
-            `<i>To force post the latest available post anyway, send:</i>\n<code>/post_today force</code>`,
-            { parse_mode: "HTML" }
-          );
-          return;
-        }
-
-        await ctx.reply(`APOD check skipped: ${evaluation.message}`);
-        return;
-      }
-
-      const posted = await poster.postToChannel(post, isForce);
+      // Manual posting with force=true so user action is honored
+      const posted = await poster.postToChannel(post, true);
       if (posted) {
-        await ctx.reply(`Successfully published APOD [${post.dateStr}] - "<b>${post.title}</b>" to <code>${config.channelId}</code>.`, {
-          parse_mode: "HTML",
-        });
+        await ctx.reply(
+          `✅ <b>Successfully published to channel:</b>\n` +
+          `APOD [${post.dateStr}] - "<b>${post.title}</b>" (<code>${config.channelId}</code>)`,
+          { parse_mode: "HTML" }
+        );
       } else {
-        await ctx.reply(`APOD [${post.dateStr}] was not posted.`);
+        await ctx.reply(`⚠️ APOD [${post.dateStr}] was not posted.`);
       }
     } catch (err: any) {
-      console.error("[ERROR] Failed handling /post_today command:", err);
-      await ctx.reply(`Error posting to channel: ${err?.message || err}`);
+      console.error("[ERROR] Failed posting APOD via inline button:", err);
+      await ctx.reply(`❌ Error posting to channel: ${err?.message || err}`);
     }
+  });
+
+  // Callback Query Handler: Cancel
+  bot.callbackQuery(/^cancel_apod(?::(.+))?$/, async (ctx) => {
+    await ctx.answerCallbackQuery({ text: "Action cancelled." });
+
+    // Remove inline buttons
+    await ctx.editMessageReplyMarkup({ reply_markup: undefined }).catch(() => {});
+
+    await ctx.reply("❌ APOD posting cancelled.");
   });
 
   return { bot, poster };
